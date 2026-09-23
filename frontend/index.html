@@ -231,7 +231,7 @@ footer { display: flex; justify-content: space-between; margin-top: 54px; paddin
  
   // When FastAPI serves this page (port 8000) use the same origin;
   // otherwise (file:// or another dev server) talk to the local backend.
-  const API_URL = location.protocol.startsWith("http") && location.port === "8000" ? "" : "http://localhost:8000";
+   const API_URL = location.port === "8000" ? "" : (location.protocol === "file:" || location.hostname === "localhost" || location.hostname === "127.0.0.1") ? "http://localhost:8000" : "https://secret-timeline-api.onrender.com";
  
   /* ---------- Icons (lucide) ---------- */
   const ICONS = {
