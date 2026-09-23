@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Secret Timeline Scanner — Git History Security</title>
+<meta name="description" content="Inspect complete git histories for exposed and resolved secrets." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Orbitron:wght@400;500;700;800&display=swap" rel="stylesheet" />
+<style>
+/* ---------- Minimal reset (replaces Tailwind's preflight) ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { line-height: 1.5; -webkit-text-size-adjust: 100%; }
+h1, h2, h3, p { margin: 0; }
+h1, h2, h3 { font-size: inherit; font-weight: inherit; }
+svg { display: block; }
+button, input { font: inherit; letter-spacing: inherit; color: inherit; }
+ 
+/* ---------- Design tokens ---------- */
+:root {
+  --font-sans: "Inter", sans-serif;
+  --font-display: "Orbitron", sans-serif;
+  --radius: 0.5rem;
+  --background: oklch(0.13 0.012 250);
+  --foreground: oklch(0.94 0.012 240);
+  --card: oklch(0.17 0.014 245 / 82%);
+  --primary: oklch(0.71 0.15 250);
+  --muted-foreground: oklch(0.66 0.025 245);
+  --border: oklch(0.29 0.02 245);
+  --danger: oklch(0.67 0.22 15);
+  --safe: oklch(0.85 0.16 170);
+  --chrome: oklch(0.88 0.01 245);
+ 
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-primary: var(--primary);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-danger: var(--danger);
+  --color-safe: var(--safe);
+  --color-chrome: var(--chrome);
+}
+ 
+* { border-color: var(--color-border); }
+body { background-color: var(--color-background); color: var(--color-foreground); font-family: var(--font-sans); margin: 0; min-width: 320px; }
+ 
+@keyframes chrome-flow { to { background-position: 200% center; } }
+@keyframes scan-sweep { 0% { transform: translateX(-110%); } 100% { transform: translateX(500%); } }
+@keyframes drift { 0%,100% { transform: translate(-8%, -6%); } 50% { transform: translate(18%, 12%); } }
+@keyframes twinkle { 0%,100% { opacity: .18; } 50% { opacity: .78; } }
+@keyframes pulse-dot { 50% { box-shadow: 0 0 16px var(--color-primary); opacity: .55; } }
+ 
+.scanner-app { min-height: 100vh; overflow: hidden; position: relative; background: var(--color-background); }
+.scanner-app::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .24; background-image: radial-gradient(circle at 20% 30%, var(--color-foreground) 0 1px, transparent 1.2px), radial-gradient(circle at 75% 65%, var(--color-foreground) 0 1px, transparent 1.4px), radial-gradient(circle at 42% 83%, var(--color-foreground) 0 .7px, transparent 1px); background-size: 61px 61px, 97px 97px, 43px 43px; }
+.starfield { position: fixed; inset: 0; pointer-events: none; }
+.starfield i { position: absolute; width: 2px; height: 2px; border-radius: 50%; background: var(--color-foreground); box-shadow: 8vw 9vh 0 0 var(--color-foreground), 21vw 38vh 1px 0 var(--color-foreground), 36vw 15vh 0 0 var(--color-foreground), 54vw 28vh 1px 0 var(--color-foreground), 68vw 8vh 0 0 var(--color-foreground), 83vw 45vh 1px 0 var(--color-foreground), 92vw 17vh 0 0 var(--color-foreground), 15vw 72vh 1px 0 var(--color-foreground), 47vw 66vh 0 0 var(--color-foreground), 73vw 88vh 1px 0 var(--color-foreground), 95vw 76vh 0 0 var(--color-foreground); animation: twinkle 5s ease-in-out infinite; }
+.starfield i:nth-child(2) { left: 4%; top: 17%; animation-delay: -1.8s; animation-duration: 7s; transform: rotate(73deg); }
+.starfield i:nth-child(3) { left: 9%; top: 3%; animation-delay: -3.2s; animation-duration: 9s; transform: rotate(151deg); }
+.cosmic-glow { position: fixed; width: 54vw; height: 54vw; top: 2%; left: 5%; border-radius: 50%; opacity: .13; filter: blur(80px); background: radial-gradient(circle, var(--color-primary), transparent 68%); animation: drift 20s ease-in-out infinite; pointer-events: none; }
+.app-shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 76px 0 36px; position: relative; z-index: 1; }
+.app-header { text-align: center; margin-bottom: 42px; }
+.eyebrow, .panel-kicker { font-family: var(--font-display); color: var(--color-primary); font-size: 10px; font-weight: 700; letter-spacing: .18em; }
+.eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px; }
+.chrome-title { margin: 0; font-family: var(--font-display); font-size: clamp(2.25rem, 6vw, 5.25rem); line-height: 1.04; letter-spacing: 0; font-weight: 800; background: linear-gradient(110deg, oklch(0.55 0.01 245), oklch(1 0 0), oklch(0.63 0.02 245), oklch(0.98 0.01 230), oklch(0.48 0.01 245)); background-size: 200% auto; background-clip: text; -webkit-background-clip: text; color: transparent; animation: chrome-flow 5s linear infinite; filter: drop-shadow(0 0 18px color-mix(in oklab, var(--color-primary) 18%, transparent)); }
+.app-header p { margin: 18px auto 0; max-width: 680px; color: var(--color-muted-foreground); font-size: 15px; line-height: 1.65; }
+.glass-panel, .scan-console { background: color-mix(in oklab, var(--color-card) 88%, transparent); border: 1px solid var(--color-border); backdrop-filter: blur(16px); border-radius: var(--radius); }
+.scan-console { padding: 14px 14px 10px; box-shadow: 0 18px 70px color-mix(in oklab, var(--color-background) 65%, transparent); }
+.scan-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+.repo-input-wrap { height: 50px; display: flex; align-items: center; gap: 11px; padding: 0 15px; border: 1px solid var(--color-border); border-radius: 6px; background: color-mix(in oklab, var(--color-background) 72%, transparent); color: var(--color-muted-foreground); transition: border-color .2s, box-shadow .2s; }
+.repo-input-wrap:focus-within { border-color: var(--color-primary); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 13%, transparent); }
+.repo-input-wrap input { width: 100%; border: 0; outline: 0; color: var(--color-foreground); background: transparent; font-size: 14px; }
+.repo-input-wrap input::placeholder { color: var(--color-muted-foreground); }
+.repo-input-wrap input:disabled { opacity: .6; }
+.scan-button { min-width: 130px; border: 1px solid var(--color-chrome); border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; cursor: pointer; color: var(--color-background); font-family: var(--font-display); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; background: linear-gradient(110deg, oklch(0.58 0.01 245), oklch(0.98 0 0), oklch(0.7 0.015 245), oklch(0.98 0 0)); background-size: 200% auto; animation: chrome-flow 4s linear infinite; transition: transform .2s, box-shadow .2s; }
+.scan-button:hover { transform: translateY(-1px); box-shadow: 0 0 28px color-mix(in oklab, var(--color-primary) 34%, transparent); }
+.scan-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+.scan-track { height: 2px; margin-top: 12px; background: var(--color-border); position: relative; overflow: hidden; }
+.scan-track span { position: absolute; inset-block: 0; width: 20%; opacity: 0; background: linear-gradient(90deg, transparent, var(--color-primary), transparent); box-shadow: 0 0 14px var(--color-primary); }
+.scan-track.is-scanning span { opacity: 1; animation: scan-sweep 1.6s linear infinite; }
+.scan-meta { min-height: 25px; display: flex; align-items: center; gap: 8px; padding-top: 9px; color: var(--color-muted-foreground); font-family: var(--font-display); font-size: 9px; letter-spacing: .1em; }
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-muted-foreground); }
+.live-dot.active { background: var(--color-primary); animation: pulse-dot 1.2s ease-in-out infinite; }
+.scan-mode { margin-left: auto; color: var(--color-primary); }
+.scan-error { margin-top: 12px; padding-bottom: 4px; }
+.scan-error .status-badge { margin-left: 0; white-space: normal; border-radius: 10px; line-height: 1.5; font-size: 10px; }
+.summary-section { margin-top: 22px; }
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.stat-card { min-height: 132px; padding: 22px; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; position: relative; }
+.stat-card::after { content: ""; position: absolute; inset: auto 0 0; height: 2px; background: var(--color-primary); opacity: .45; }
+.stat-value { font-family: var(--font-display); font-size: clamp(1.8rem, 4vw, 2.6rem); font-weight: 700; }
+.stat-label { color: var(--color-muted-foreground); font-size: 11px; text-transform: uppercase; letter-spacing: .12em; }
+.stat-danger .stat-value { color: var(--color-danger); }
+.stat-safe .stat-value { color: var(--color-safe); }
+.stat-danger::after { background: var(--color-danger); }
+.stat-safe::after { background: var(--color-safe); }
+.breakdown-card { margin-top: 12px; padding: 20px 22px; display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+.breakdown-card h3, .secret-card h3 { font-family: var(--font-display); margin: 6px 0 0; font-size: 15px; letter-spacing: 0; }
+.type-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.type-chips span, .count-pill { border: 1px solid var(--color-border); background: color-mix(in oklab, var(--color-primary) 7%, transparent); border-radius: 999px; color: var(--color-muted-foreground); font-size: 11px; padding: 7px 10px; }
+.type-chips b { color: var(--color-primary); margin-left: 6px; }
+.data-section { margin-top: 58px; }
+.section-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 15px; }
+.section-heading h2 { margin: 0; font-family: var(--font-display); font-size: 21px; letter-spacing: 0; }
+.count-pill { padding: 5px 9px; color: var(--color-primary); font-family: var(--font-display); font-size: 9px; }
+.table-panel { overflow: hidden; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; min-width: 790px; border-collapse: collapse; font-size: 13px; }
+th { padding: 15px 18px; text-align: left; color: var(--color-muted-foreground); font-family: var(--font-display); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; background: color-mix(in oklab, var(--color-background) 60%, transparent); }
+td { border-top: 1px solid var(--color-border); padding: 17px 18px; color: var(--color-muted-foreground); transition: background-color .2s; }
+tbody tr:hover td { background: color-mix(in oklab, var(--color-primary) 7%, transparent); }
+.risk-row td:first-child { box-shadow: inset 3px 0 0 var(--color-danger); }
+.message-cell { color: var(--color-foreground); }
+.date-cell { white-space: nowrap; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); font-weight: 500; }
+.commit-status { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-weight: 600; }
+.commit-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+.commit-status.risk { color: var(--color-danger); }
+.commit-status.clean { color: var(--color-safe); }
+.secrets-list { display: grid; gap: 12px; }
+.secret-card { padding: 21px 22px 18px; transition: transform .2s, border-color .2s, box-shadow .2s; }
+.secret-card:hover { transform: translateY(-2px); border-color: color-mix(in oklab, var(--color-primary) 70%, var(--color-border)); box-shadow: 0 12px 36px color-mix(in oklab, var(--color-primary) 8%, transparent); }
+.secret-card-head { display: flex; align-items: center; gap: 12px; }
+.secret-icon { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-primary); background: color-mix(in oklab, var(--color-primary) 8%, transparent); }
+.status-badge { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 6px 9px; font-family: var(--font-display); font-size: 9px; font-weight: 700; white-space: nowrap; }
+.status-danger { color: var(--color-danger); border: 1px solid color-mix(in oklab, var(--color-danger) 35%, transparent); background: color-mix(in oklab, var(--color-danger) 8%, transparent); }
+.status-safe { color: var(--color-safe); border: 1px solid color-mix(in oklab, var(--color-safe) 35%, transparent); background: color-mix(in oklab, var(--color-safe) 8%, transparent); }
+.secret-details { display: grid; grid-template-columns: 1.7fr .7fr repeat(4, 1fr); gap: 16px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--color-border); }
+.detail { min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.detail > span { color: var(--color-muted-foreground); font-family: var(--font-display); font-size: 8px; text-transform: uppercase; letter-spacing: .1em; }
+.detail strong { overflow-wrap: anywhere; color: var(--color-foreground); font-size: 11px; font-weight: 500; }
+.detail strong.mono { color: var(--color-primary); }
+.detail strong.text-danger { color: var(--color-danger); }
+.detail strong.text-safe { color: var(--color-safe); }
+.empty-note { padding: 28px 22px; color: var(--color-muted-foreground); font-size: 13px; }
+footer { display: flex; justify-content: space-between; margin-top: 54px; padding-top: 18px; border-top: 1px solid var(--color-border); color: var(--color-muted-foreground); font-family: var(--font-display); font-size: 8px; letter-spacing: .15em; }
+ 
+@media (max-width: 850px) {
+  .secret-details { grid-template-columns: repeat(3, 1fr); }
+  .breakdown-card { align-items: flex-start; flex-direction: column; }
+  .type-chips { justify-content: flex-start; }
+}
+@media (max-width: 640px) {
+  .app-shell { width: min(100% - 24px, 1180px); padding-top: 48px; }
+  .app-header { margin-bottom: 30px; }
+  .scan-row { grid-template-columns: 1fr; }
+  .scan-button { height: 48px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .stat-card { min-height: 116px; padding: 17px; }
+  .data-section { margin-top: 42px; }
+  .secret-card-head { align-items: flex-start; }
+  .secret-card { padding: 17px 15px; }
+  .secret-details { grid-template-columns: repeat(2, 1fr); }
+  .status-badge { margin-left: auto; }
+  .scan-mode { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+<main class="scanner-app">
+  <div class="starfield" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="cosmic-glow" aria-hidden="true"></div>
+ 
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="eyebrow"><span data-icon="radar" data-size="14"></span> REPOSITORY SECURITY CONSOLE</div>
+      <h1 class="chrome-title">Secret Timeline Scanner</h1>
+      <p>Scan a repo's full git history for leaked secrets — even ones already deleted.</p>
+    </header>
+ 
+    <section class="scan-console" aria-label="Repository scanner">
+      <div class="scan-row">
+        <label class="repo-input-wrap" for="repository">
+          <span data-icon="search" data-size="18"></span>
+          <input id="repository" type="text" placeholder="https://github.com/owner/repo" autocomplete="off" spellcheck="false" />
+        </label>
+        <button class="scan-button" id="scan-btn" type="button" aria-pressed="false">
+          <span data-icon="radar" data-size="17"></span><span id="scan-btn-label">Scan</span>
+        </button>
+      </div>
+      <div class="scan-track" id="scan-track" aria-label="Scanner idle"><span></span></div>
+      <div class="scan-meta">
+        <span class="live-dot" id="live-dot"></span>
+        <span id="meta-text">Scanner ready</span>
+        <span class="scan-mode">DEEP HISTORY MODE</span>
+      </div>
+      <div class="scan-error" id="scan-error" role="alert" hidden></div>
+    </section>
+ 
+    <section class="summary-section" aria-label="Scan summary">
+      <div class="stats-grid">
+        <article class="glass-panel stat-card"><span class="stat-value" id="stat-commits">0</span><span class="stat-label">Commits Scanned</span></article>
+        <article class="glass-panel stat-card"><span class="stat-value" id="stat-total">0</span><span class="stat-label">Total Secrets</span></article>
+        <article class="glass-panel stat-card stat-danger"><span class="stat-value" id="stat-present">0</span><span class="stat-label">Still Present</span></article>
+        <article class="glass-panel stat-card stat-safe"><span class="stat-value" id="stat-resolved">0</span><span class="stat-label">Resolved</span></article>
+      </div>
+      <article class="glass-panel breakdown-card">
+        <div><span class="panel-kicker">SIGNATURE ANALYSIS</span><h3>Breakdown By Type</h3></div>
+        <div class="type-chips" id="type-chips"></div>
+      </article>
+    </section>
+ 
+    <section class="data-section" id="commit-history">
+      <div class="section-heading"><h2>Commit History</h2><span class="count-pill" id="commit-badge"></span></div>
+      <div class="glass-panel table-panel">
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Status</th><th>Commit</th><th>Message</th><th>Author</th><th>Date</th></tr></thead>
+            <tbody id="commit-rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+ 
+    <section class="data-section secrets-section" id="secrets-found">
+      <div class="section-heading"><h2>Secrets Found</h2><span class="count-pill" id="secret-badge"></span></div>
+      <div class="secrets-list" id="secrets-list"></div>
+    </section>
+ 
+    <footer><span>STS // BUILD 01.4</span><span id="footer-right">SAMPLE DATA</span></footer>
+  </div>
+</main>
+ 
+<script>
+(() => {
+  "use strict";
+ 
+  // When FastAPI serves this page (port 8000) use the same origin;
+  // otherwise (file:// or another dev server) talk to the local backend.
+  const API_URL = location.protocol.startsWith("http") && location.port === "8000" ? "" : "http://localhost:8000";
+ 
+  /* ---------- Icons (lucide) ---------- */
+  const ICONS = {
+    radar: '<path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/>',
+    search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    alert: '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+  };
+ 
+  const icon = (name, size) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+ 
+  document.querySelectorAll("[data-icon]").forEach((el) => {
+    el.outerHTML = icon(el.dataset.icon, el.dataset.size);
+  });
+ 
+  // Commit messages, author names and paths come from the scanned repo, so always escape them.
+  const esc = (value) =>
+    String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+ 
+  const $ = (id) => document.getElementById(id);
+ 
+  /* ---------- Sample data (shown until the first scan) ---------- */
+  const demoData = {
+    scanId: null,
+    totalCommits: 2847,
+    totalSecrets: 5,
+    stillPresent: 2,
+    resolved: 3,
+    byType: [["AWS Access Key", 2], ["Private Key Block", 1], ["GitHub Personal Access Token", 1], ["Slack Webhook", 1]],
+    commits: [
+      { status: "At risk", hash: "f8a21c7", message: "Add production deployment config", author: "Maya Chen", date: "Sep 18, 2026" },
+      { status: "Clean", hash: "c31d9e2", message: "Rotate AWS credentials", author: "Noah Williams", date: "Sep 17, 2026" },
+      { status: "At risk", hash: "9bd11a4", message: "Configure Slack notifications", author: "Elena Rossi", date: "Sep 14, 2026" },
+      { status: "Clean", hash: "5e70bc8", message: "Remove legacy environment file", author: "Maya Chen", date: "Sep 12, 2026" },
+      { status: "At risk", hash: "17c0afe", message: "Initial API integration", author: "Jon Bell", date: "Sep 08, 2026" },
+      { status: "Clean", hash: "aa640d3", message: "Harden request validation", author: "Noah Williams", date: "Sep 04, 2026" },
+      { status: "Clean", hash: "43ed92b", message: "Initialize repository", author: "Jon Bell", date: "Aug 29, 2026" },
+    ],
+    secrets: [
+      { type: "AWS Access Key", status: "Still present", location: "config/production.env:12", commit: "f8a21c7", date: "Sep 18, 2026", author: "Maya Chen", detected: "Pattern + entropy", live: "Confirmed active" },
+      { type: "Slack Webhook", status: "Still present", location: "src/lib/notifications.ts:28", commit: "9bd11a4", date: "Sep 14, 2026", author: "Elena Rossi", detected: "Provider signature", live: "Endpoint responds" },
+      { type: "Private Key Block", status: "Resolved", location: "certs/deploy-key.pem:1", commit: "17c0afe", date: "Sep 08, 2026", author: "Jon Bell", detected: "PEM signature", live: "No longer present" },
+      { type: "GitHub Personal Access Token", status: "Resolved", location: ".env.example:7", commit: "5e70bc8", date: "Sep 12, 2026", author: "Maya Chen", detected: "Token prefix", live: "Revoked" },
+      { type: "AWS Access Key", status: "Resolved", location: "scripts/release.sh:16", commit: "c31d9e2", date: "Sep 17, 2026", author: "Noah Williams", detected: "Pattern + entropy", live: "Rotated" },
+    ],
+  };
+ 
+  /* ---------- API -> view model ---------- */
+  const timeOf = (value) => {
+    const t = new Date(value).getTime();
+    return Number.isNaN(t) ? 0 : t;
+  };
+ 
+  const formatDate = (value) => {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value ?? "");
+    return d.toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
+  };
+ 
+  const liveLabel = (f) => {
+    if (!f.still_present) return "No longer present";
+    return f.is_live ? "Confirmed active" : "Not confirmed active";
+  };
+ 
+  function toViewData(results) {
+    const { summary } = results;
+ 
+    const commits = [...results.commits]
+      .sort((a, b) => timeOf(b.commit_date) - timeOf(a.commit_date))
+      .map((c) => ({
+        status: c.has_secret ? "At risk" : "Clean",
+        hash: String(c.commit_hash).slice(0, 7),
+        message: c.message,
+        author: c.author,
+        date: formatDate(c.commit_date),
+      }));
+ 
+    const secrets = [...results.findings]
+      .sort((a, b) => Number(b.still_present) - Number(a.still_present) || timeOf(b.commit_date) - timeOf(a.commit_date))
+      .map((f) => ({
+        type: f.secret_type,
+        status: f.still_present ? "Still present" : "Resolved",
+        location: `${f.file_path}:${f.line_number}`,
+        commit: String(f.commit_hash).slice(0, 7),
+        date: formatDate(f.commit_date),
+        author: f.author,
+        detected: f.detected_by,
+        live: liveLabel(f),
+      }));
+ 
+    return {
+      scanId: results.scan_id,
+      totalCommits: summary.total_commits,
+      totalSecrets: summary.total_findings,
+      stillPresent: summary.still_present,
+      resolved: summary.resolved,
+      byType: Object.entries(summary.by_type).sort((a, b) => b[1] - a[1]),
+      commits,
+      secrets,
+    };
+  }
+ 
+  async function readError(res) {
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") return body.detail;
+    } catch (_) {
+      // response wasn't JSON
+    }
+    return `Request failed (${res.status})`;
+  }
+ 
+  /* ---------- State + rendering ---------- */
+  const state = { scanning: false, error: null, view: demoData, truncated: false, controller: null };
+ 
+  const statusBadge = (status) => {
+    const danger = status === "Still present";
+    return `<span class="status-badge ${danger ? "status-danger" : "status-safe"}">${icon(danger ? "alert" : "check", 13)}${esc(status)}</span>`;
+  };
+ 
+  const detail = (label, value, { mono = false, tone = "" } = {}) =>
+    `<div class="detail"><span>${esc(label)}</span><strong class="${mono ? "mono" : ""} ${tone ? "text-" + tone : ""}">${esc(value)}</strong></div>`;
+ 
+  function renderData() {
+    const { view } = state;
+    const atRisk = view.commits.filter((c) => c.status === "At risk").length;
+ 
+    $("stat-commits").textContent = view.totalCommits.toLocaleString();
+    $("stat-total").textContent = String(view.totalSecrets);
+    $("stat-present").textContent = String(view.stillPresent);
+    $("stat-resolved").textContent = String(view.resolved);
+ 
+    $("type-chips").innerHTML = view.byType.length
+      ? view.byType.map(([type, count]) => `<span>${esc(type)} <b>${esc(count)}</b></span>`).join("")
+      : "<span>No secrets found</span>";
+ 
+    $("commit-badge").textContent = `${view.commits.length} total · ${atRisk} at risk`;
+    $("commit-rows").innerHTML = view.commits
+      .map((c) => {
+        const risk = c.status === "At risk";
+        return `<tr class="${risk ? "risk-row" : ""}">
+          <td><span class="commit-status ${risk ? "risk" : "clean"}"><i></i>${esc(c.status)}</span></td>
+          <td><code>${esc(c.hash)}</code></td>
+          <td class="message-cell">${esc(c.message)}</td>
+          <td>${esc(c.author)}</td>
+          <td class="date-cell">${esc(c.date)}</td>
+        </tr>`;
+      })
+      .join("");
+ 
+    $("secret-badge").textContent = `${view.secrets.length} detected`;
+    $("secrets-list").innerHTML = view.secrets.length
+      ? view.secrets
+          .map(
+            (s) => `<article class="glass-panel secret-card">
+          <div class="secret-card-head">
+            <div class="secret-icon">${icon("shield", 19)}</div>
+            <div><span class="panel-kicker">EXPOSED CREDENTIAL</span><h3>${esc(s.type)}</h3></div>
+            ${statusBadge(s.status)}
+          </div>
+          <div class="secret-details">
+            ${detail("Location", s.location, { mono: true })}
+            ${detail("Commit", s.commit, { mono: true })}
+            ${detail("Date Introduced", s.date)}
+            ${detail("Author", s.author)}
+            ${detail("Detected By", s.detected)}
+            ${detail("Live Check", s.live, { tone: s.status === "Still present" ? "danger" : "safe" })}
+          </div>
+        </article>`,
+          )
+          .join("")
+      : '<div class="glass-panel empty-note">No secrets were found in this repository\'s history.</div>';
+ 
+    $("footer-right").textContent = view.scanId ? `SCAN ${view.scanId.slice(0, 8).toUpperCase()}` : "SAMPLE DATA";
+  }
+ 
+  function renderStatus() {
+    const { scanning, error, view, truncated } = state;
+    const isDemo = view.scanId === null;
+ 
+    $("scan-btn").setAttribute("aria-pressed", String(scanning));
+    $("scan-btn-label").textContent = scanning ? "Stop scan" : "Scan";
+    $("repository").disabled = scanning;
+    $("scan-track").className = "scan-track" + (scanning ? " is-scanning" : "");
+    $("scan-track").setAttribute("aria-label", scanning ? "Scan in progress" : "Scanner idle");
+    $("live-dot").className = scanning ? "live-dot active" : "live-dot";
+ 
+    $("meta-text").textContent = scanning
+      ? "Scanning complete commit history…"
+      : isDemo
+        ? "Scanner ready"
+        : `Scan complete · ${view.totalCommits} commits${truncated ? " (most recent only)" : ""}`;
+ 
+    const box = $("scan-error");
+    if (error) {
+      box.hidden = false;
+      box.innerHTML = `<span class="status-badge status-danger">${icon("alert", 13)}${esc(error)}</span>`;
+    } else {
+      box.hidden = true;
+      box.innerHTML = "";
+    }
+  }
+ 
+  /* ---------- Scan flow ---------- */
+  async function startScan() {
+    if (state.scanning) return;
+ 
+    const repoUrl = $("repository").value.trim();
+    if (!repoUrl) {
+      state.error = "Enter a repository URL to scan.";
+      renderStatus();
+      return;
+    }
+ 
+    const controller = new AbortController();
+    state.controller = controller;
+    state.scanning = true;
+    state.error = null;
+    renderStatus();
+ 
+    try {
+      const scanRes = await fetch(`${API_URL}/scan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo_url: repoUrl }),
+        signal: controller.signal,
+      });
+      if (!scanRes.ok) throw new Error(await readError(scanRes));
+      const scan = await scanRes.json();
+ 
+      const resultsRes = await fetch(`${API_URL}/results/${encodeURIComponent(scan.scan_id)}`, { signal: controller.signal });
+      if (!resultsRes.ok) throw new Error(await readError(resultsRes));
+      const results = await resultsRes.json();
+ 
+      state.view = toViewData(results);
+      state.truncated = Boolean(scan.truncated);
+      renderData();
+    } catch (err) {
+      if (err && err.name === "AbortError") {
+        // user pressed Stop
+      } else if (err instanceof TypeError) {
+        state.error = `Can't reach the scanner at ${API_URL || location.origin}. Check that the backend is running.`;
+      } else {
+        state.error = err instanceof Error ? err.message : "Scan failed.";
+      }
+    } finally {
+      state.scanning = false;
+      state.controller = null;
+      renderStatus();
+    }
+  }
+ 
+  function stopScan() {
+    if (state.controller) state.controller.abort();
+  }
+ 
+  $("scan-btn").addEventListener("click", () => (state.scanning ? stopScan() : startScan()));
+  $("repository").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") startScan();
+  });
+ 
+  renderData();
+  renderStatus();
+})();
+</script>
+</body>
+</html>
+ 
